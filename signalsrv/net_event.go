@@ -57,20 +57,35 @@ var NetEventTypeITS = map[int]string{
 	102: "Log",
 }
 
+type NetEventDataType int
+
 const (
-	NetEventDataTypeNull        = 0
-	NetEventDataTypeByteArray   = 1
-	NetEventDataTypeUTF16String = 2
+	NetEventDataTypeNull NetEventDataType = iota
+	NetEventDataTypeByteArray
+	NetEventDataTypeUTF16String
 )
 
-var NetEventDataType = map[string]int32{
+func (t NetEventDataType) String() string {
+	switch t {
+	case NetEventDataTypeNull:
+		return "Null"
+	case NetEventDataTypeByteArray:
+		return "ByteArray"
+	case NetEventDataTypeUTF16String:
+		return "UTF16String"
+	default:
+		return "unknown"
+	}
+}
+
+var NetEventDataTypeMap = map[string]int32{
 	"Null":        0,
 	"ByteArray":   1,
 	"UTF16String": 2,
 }
 
 type NetEventData struct {
-	Type       string
+	Type       NetEventDataType
 	StringData *string
 	ObjectData []uint8
 }
@@ -106,24 +121,24 @@ func (ne *NetworkEvent) GetRawData() *NetEventData {
 }
 
 func (ne *NetworkEvent) GetMessageData() *NetEventData {
-	if ne.Data.Type != "string" {
+	if ne.Data.Type != NetEventDataTypeUTF16String {
 		return ne.Data
 	}
 	return nil
 }
 
 func (ne *NetworkEvent) GetInfo() *NetEventData {
-	if ne.Data.Type == "string" {
+	if ne.Data.Type == NetEventDataTypeUTF16String {
 		return ne.Data
 	}
 	return nil
 }
 
-func (ne *NetworkEvent) ToString() (output string) {
+func (ne *NetworkEvent) String() (output string) {
 	var data string
-	if ne.Data.Type == "string" && ne.Data.StringData != nil {
+	if ne.Data.Type == NetEventDataTypeUTF16String && ne.Data.StringData != nil {
 		data = *ne.Data.StringData
-	} else if ne.Data.Type == "object" {
+	} else if ne.Data.Type == NetEventDataTypeByteArray {
 		d, err := toUint16Array(ne.Data.ObjectData)
 		if err != nil {
 			log.Println("parse data error: ", err)
@@ -131,38 +146,52 @@ func (ne *NetworkEvent) ToString() (output string) {
 			data = string(utf16.Decode(d))
 		}
 	}
-	output = fmt.Sprintf("NetworkEvent[NetEventType: (%d), id: (%s), Data: (%s)]",
+	output = fmt.Sprintf("NetworkEvent[NetEventType: (%s), id: (%d), Data: (%s)]",
 		NetEventTypeITS[ne.Type], ne.ConnectionId.ID, data)
 
 	return
 }
 
+type baseNetworkEvent struct {
+	Type         int           `json:"type"`
+	ConnectionId *ConnectionId `json:"connectionId"`
+	Data         interface{}   `json:"data"`
+}
+
 func ParseFromString(str string) *NetworkEvent {
-	evt := make(map[string]interface{})
+	evt := baseNetworkEvent{}
 	err := json.Unmarshal([]byte(str), &evt)
 	if err != nil {
 		log.Printf("ParseFromString error. str: %s, err: %s", str, err.Error())
+		return nil
+	}
+	if evt.ConnectionId == nil {
+		log.Printf("ParseFromString error. str: %s, err: %s", str, "no connectionId")
+		return nil
 	}
 
 	data := new(NetEventData)
-	if reflect.ValueOf(evt["data"]).IsNil() {
-		data.Type = "null"
-	} else if reflect.TypeOf(evt["data"]).String() == "string" {
-		data.Type = "string"
-		s := evt["data"].(string)
+	if evt.Data == nil || reflect.TypeOf(evt.Data).String() == "<nil>" {
+		data.Type = NetEventDataTypeNull
+	} else if reflect.TypeOf(evt.Data).String() == "string" {
+		data.Type = NetEventDataTypeUTF16String
+		s := evt.Data.(string)
 		data.StringData = &s
-	} else if reflect.TypeOf(evt["data"]).String() == "[]interface {}" {
-		// 跟node版本保存一致
-		data.Type = "object"
-		data.ObjectData = evt["data"].([]uint8)
+	} else if reflect.TypeOf(evt.Data).String() == "[]interface {}" {
+		data.Type = NetEventDataTypeByteArray
+		for _, v := range evt.Data.([]interface{}) {
+			data.ObjectData = append(data.ObjectData, uint8(v.(float64)))
+		}
 	} else {
 		log.Println("data can't be parsed")
+		return nil
 	}
-	return NewNetworkEvent(evt["type"].(int), NewConnectionId(evt["connectionId"].(map[string]int16)["id"]), data)
+
+	return NewNetworkEvent(evt.Type, NewConnectionId(evt.ConnectionId.ID), data)
 }
 
 // 首先数据是小端字节序
-// example: arr := []byte{3 2 255 255 3 0 0 0 49 0 50 0 51 0}
+// example: arr := []byte{3, 2, 255, 255, 3, 0, 0, 0, 49, 0, 50, 0, 51, 0}
 // arr[0]为事件类型(event_type, uint8), arr[1]为数据类型(data_type, uint8)
 // arr[2:4]为connection_id( int16 ), arr[4:8]为数据长度(data_length, uint32),
 // arr[8:data_length]为数据(data, uint16)
@@ -178,10 +207,10 @@ func FromByteArray(arr []byte) (*NetworkEvent, error) {
 	}
 
 	data := new(NetEventData)
-	switch dataType {
+	switch NetEventDataType(dataType) {
 	case NetEventDataTypeByteArray:
 		length := binary.LittleEndian.Uint32(arr[4:8])
-		data.Type = "object"
+		data.Type = NetEventDataTypeByteArray
 		data.ObjectData = arr[8 : 8+length]
 	case NetEventDataTypeUTF16String:
 		length := binary.LittleEndian.Uint32(arr[4:8])
@@ -190,11 +219,11 @@ func FromByteArray(arr []byte) (*NetworkEvent, error) {
 			log.Println("parse data error: ", err)
 			return nil, err
 		}
-		data.Type = "string"
+		data.Type = NetEventDataTypeUTF16String
 		str := string(utf16.Decode(d))
 		data.StringData = &str
 	case NetEventDataTypeNull:
-		data.Type = "null"
+		data.Type = NetEventDataTypeNull
 	default:
 		log.Println("Message has an invalid data type flag: ", dataType)
 		return nil, errors.New(fmt.Sprintf("Message has an invalid data type flag: %d", dataType))
@@ -215,17 +244,17 @@ func toUint16Array(buf []byte) ([]uint16, error) {
 }
 
 func (ne *NetworkEvent) ToByteArray() []byte {
-	var dataType int
+	var dataType NetEventDataType
 	length := 4
 	switch ne.Data.Type {
-	case "null":
-		dataType = NetEventDataTypeNull
-	case "string":
+	case NetEventDataTypeByteArray:
+		dataType = NetEventDataTypeByteArray
+		length += len(ne.Data.ObjectData) + 4
+	case NetEventDataTypeUTF16String:
 		dataType = NetEventDataTypeUTF16String
 		length += len([]rune(*ne.Data.StringData))*2 + 4
 	default:
-		dataType = NetEventDataTypeByteArray
-		length += len(ne.Data.ObjectData) + 4
+		dataType = NetEventDataTypeNull
 	}
 
 	result := make([]byte, length)

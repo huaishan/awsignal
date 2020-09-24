@@ -93,7 +93,7 @@ func (sp *SignalingPeer) handleIncomingEvent(evt *NetworkEvent) {
 	case NetEventTypeNewConnection:
 		addr := evt.GetInfo().StringData
 		if addr != nil {
-			sp.connect(*evt.GetInfo().StringData, evt.ConnectionId)
+			sp.connect(*addr, evt.ConnectionId)
 		}
 	case NetEventTypeConnectionFailed:
 	case NetEventTypeDisconnected:
@@ -116,17 +116,17 @@ func (sp *SignalingPeer) handleIncomingEvent(evt *NetworkEvent) {
 func (sp *SignalingPeer) internalAddIncomingPeer(peer *SignalingPeer) {
 	id := sp.nextConnectionId()
 	sp.connections[id.ID] = peer
-	sp.sendToClient(NewNetworkEvent(NetEventTypeNewConnection, id, &NetEventData{Type: "null"}))
+	sp.sendToClient(NewNetworkEvent(NetEventTypeNewConnection, id, &NetEventData{Type: NetEventDataTypeNull}))
 }
 
 func (sp *SignalingPeer) internalAddOutgoingPeer(peer *SignalingPeer, id *ConnectionId) {
 	sp.connections[id.ID] = peer
-	sp.sendToClient(NewNetworkEvent(NetEventTypeNewConnection, id, &NetEventData{Type: "null"}))
+	sp.sendToClient(NewNetworkEvent(NetEventTypeNewConnection, id, &NetEventData{Type: NetEventDataTypeNull}))
 }
 
 func (sp *SignalingPeer) internalRemovePeer(id *ConnectionId) {
 	delete(sp.connections, id.ID)
-	sp.sendToClient(NewNetworkEvent(NetEventTypeDisconnected, id, &NetEventData{Type: "null"}))
+	sp.sendToClient(NewNetworkEvent(NetEventTypeDisconnected, id, &NetEventData{Type: NetEventDataTypeNull}))
 }
 
 func (sp *SignalingPeer) findPeerConnectionId(otherPeer *SignalingPeer) *ConnectionId {
@@ -151,7 +151,7 @@ func (sp *SignalingPeer) connect(address string, id *ConnectionId) {
 		sc[0].internalAddIncomingPeer(sp)
 		sp.internalAddOutgoingPeer(sc[0], id)
 	} else {
-		sp.sendToClient(NewNetworkEvent(NetEventTypeConnectionFailed, id, &NetEventData{Type: "null"}))
+		sp.sendToClient(NewNetworkEvent(NetEventTypeConnectionFailed, id, &NetEventData{Type: NetEventDataTypeNull}))
 	}
 }
 
@@ -184,12 +184,20 @@ func (sp *SignalingPeer) startServer(address string) {
 	if sp.connectionPool.isAddressAvailable(address) {
 		sp.serverAddress = &address
 		sp.connectionPool.addServer(sp, address)
-		sp.sendToClient(NewNetworkEvent(NetEventTypeServerInitialized, INVALIDConnectionId, &NetEventData{Type: "string", StringData: &address}))
+		sp.sendToClient(NewNetworkEvent(
+			NetEventTypeServerInitialized,
+			INVALIDConnectionId,
+			&NetEventData{Type: NetEventDataTypeUTF16String, StringData: &address},
+		))
 		if sp.connectionPool.hasAddressSharing() {
 			sp.connectJoin(address)
 		}
 	} else {
-		sp.sendToClient(NewNetworkEvent(NetEventTypeServerInitFailed, INVALIDConnectionId, &NetEventData{Type: "string", StringData: &address}))
+		sp.sendToClient(NewNetworkEvent(
+			NetEventTypeServerInitFailed,
+			INVALIDConnectionId,
+			&NetEventData{Type: NetEventDataTypeUTF16String, StringData: &address},
+		))
 	}
 }
 
@@ -198,7 +206,7 @@ func (sp *SignalingPeer) stopServer() {
 		return
 	}
 	sp.connectionPool.removeServer(sp, *sp.serverAddress)
-	sp.sendToClient(NewNetworkEvent(NetEventTypeServerClosed, INVALIDConnectionId, &NetEventData{Type: "null"}))
+	sp.sendToClient(NewNetworkEvent(NetEventTypeServerClosed, INVALIDConnectionId, &NetEventData{Type: NetEventDataTypeNull}))
 	sp.serverAddress = nil
 }
 
@@ -245,7 +253,7 @@ func (sp *SignalingPeer) readPump() {
 			return
 		}
 		evt, err := FromByteArray(msg)
-		log.Println(sp.GetName(), "INC: ", evt.ToString())
+		log.Println(sp.GetName(), "INC: ", evt.String())
 		sp.handleIncomingEvent(evt)
 	}
 }
@@ -264,7 +272,7 @@ func (sp *SignalingPeer) writePump() {
 				return
 			}
 		case evt := <-sp.send:
-			log.Printf("%s OUT: %s", sp.GetName(), evt.ToString())
+			log.Printf("%s OUT: %s", sp.GetName(), evt.String())
 			sp.socket.WriteMessage(websocket.BinaryMessage, evt.ToByteArray())
 		}
 	}
