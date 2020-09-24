@@ -165,9 +165,12 @@ func ParseFromString(str string) *NetworkEvent {
 		log.Printf("ParseFromString error. str: %s, err: %s", str, err.Error())
 		return nil
 	}
+
+	var cid *ConnectionId
 	if evt.ConnectionId == nil {
-		log.Printf("ParseFromString error. str: %s, err: %s", str, "no connectionId")
-		return nil
+		cid = INVALIDConnectionId
+	} else {
+		cid = NewConnectionId(evt.ConnectionId.ID)
 	}
 
 	data := new(NetEventData)
@@ -187,7 +190,7 @@ func ParseFromString(str string) *NetworkEvent {
 		return nil
 	}
 
-	return NewNetworkEvent(evt.Type, NewConnectionId(evt.ConnectionId.ID), data)
+	return NewNetworkEvent(evt.Type, cid, data)
 }
 
 // 首先数据是小端字节序
